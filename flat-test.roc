@@ -32,10 +32,11 @@ numFromUtf8 = \nums ->
 
 takeNum = \numChars, inp ->
     when inp is
-        [] -> Err (RunOut (\inp2 -> takeNum numChars inp2))
+        [] -> Err (RunOutt (\inp2 -> takeNum numChars inp2))
         [num, .. as rest] if isNum num -> takeNum (numChars |> List.append num) rest
-        _ -> if numChars |> List.len > 0 then Ok (numChars |> numFromUtf8 |> Num, inp) else Err NotNum
+        _ -> if numChars |> List.len > 0 then Ok (numChars |> numFromUtf8 |> Num, inp) else Err (TokenizeErr)
 
+# getToken: _-> Result _ _
 getToken = \input ->
     when input is
         ['[', .. as rest] -> Ok (Open, rest)
@@ -45,37 +46,42 @@ getToken = \input ->
             if isNum a then
                 takeNum [] input
             else
-                Err Unknown
+                Err TokenizeErr
 
-        [] -> Err (RunOut (getToken))
+        [] -> Err (RunOutt (getToken))
 
 readStream = \{} -> End
-tokenize = \input ->
-    loop = \tokens, state, depth, inp ->
-        when inp |> eatWhitespace |> state is
-            Err (RunOut continueState) ->
-                when readStream {} is
-                    Next bytes ->
-                        loop tokens continueState depth bytes
+tokenizeLoop = \{tokens, continue, depth}, inp ->
+    when inp |> eatWhitespace |> continue is
+        Err (RunOutt continueState) ->
+            Err (RunOut {continue:continueState,tokens,depth})
+        Ok (token, rest) ->
+            newDepth =
+                when token is
+                    Open -> depth + 1
+                    Close -> depth - 1
+                    _ -> depth
+            newTokens = (tokens |> List.append token)
+            if newDepth == 0 then
+                Ok (newTokens, rest)
+            else
+                {tokens:newTokens, continue:(\inp2 -> getToken inp2), depth:newDepth}
+                |>tokenizeLoop  rest
+        Err (TokenizeErr) -> Err (TokenizeErr)
 
-                    End -> Ok (tokens, End)
-
-            Ok (token, rest) ->
-                newDepth =
-                    when token is
-                        Open -> depth + 1
-                        Close -> depth - 1
-                        _ -> depth
-                newTokens = (tokens |> List.append token)
-                if newDepth == 0 then
-                    Ok (newTokens, Rest rest)
-                else
-                    loop newTokens (\inp2 -> getToken inp2) newDepth rest
-
-            Err NotNum -> Err NotNum
-            Err Unknown -> Err Unknown
-
-    loop [] (\inp2 -> getToken inp2) 0 input
+## This would return
+#`readBytes` is an effectful function that returns more bytes
+tokenize = \input,readBytes ->
+    # read from the stream until we run out, read from the byte stream and then read again is needed
+    loop= \state,inp->
+        when state|>tokenizeLoop  inp is 
+            Err TokenizeErr->Err TokenizeErr
+            Err (RunOut ranOutState)->
+                when readBytes {} is
+                Rest rest-> ranOutState|>loop rest 
+                End ->Ok(ranOutState.tokens,End)
+            Ok (tokens,rest)->Ok (tokens,Rest rest)
+    loop {tokens:[],continue: (\inp2 -> getToken inp2), depth:0} input
 
 # =============
 #   Parser
@@ -124,7 +130,7 @@ parseTokens = \tokenList ->
 
 valueStream = \input, initState, handle ->
     loop = \state, inp ->
-        when inp |> tokenize is
+        when inp |> tokenize readStream is
             # Hit the final close
             Ok ([Close], End) -> Ok state
             # Just found a seperator token this means we are betwen top level items. This is a hack and I should probably parse it along with the item
