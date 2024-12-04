@@ -1,0 +1,27 @@
+/*Rabbits have a run speed, hop height, and a burrow map.
+Dogs have a run speed, bark volume, and tail wag.
+
+With the type we could decode based on that,
+
+*/
+
+[
+  {
+    "animal": "rabbit",
+    "name": "peter",
+    "runSpeed": 10,
+    "hopHeight": 5,
+    "burrowMap":[
+        {"x":0,"y":0},
+        {"x":1,"y":0},
+        {"x":2,"y":0}
+    ]
+  },
+  {
+    "animal": "dog",
+    "name": "john",
+    "runSpeed": 20,
+    "barkVolume": 100,
+    "tailWag": 10
+  }
+]
