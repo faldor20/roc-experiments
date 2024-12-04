@@ -1,0 +1,5 @@
+(library
+ (name flat_parser)
+ (libraries base stdio)
+ (preprocess (pps ppx_jane ppx_deriving.show))
+ (inline_tests))
