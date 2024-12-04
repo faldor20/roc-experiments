@@ -21,14 +21,24 @@ isNum : U8 -> Bool
 isNum = \char -> char >= '0' && char <= '9'
 
 numFromUtf8 = \nums ->
-    nums
-    |> List.walkBackwards (0, 1) \(num, idx), numChar ->
-        (((numChar - 0x30) * idx) + num, idx + 1)
-    |> .0
+    res=nums
+        |> List.walkBackwards (0, 1) \(num, idx), numChar ->
+            (((((numChar - 0x30)|>Num.toU64) * idx)+ num), idx * 10)
+        |> .0
+    res
 
+expect 
+    ['2','8']|>numFromUtf8 ==28
+expect 
+    ['2','8','8','0']|>numFromUtf8 ==2880
+expect 
+    ['2','0','8','0']|>numFromUtf8 ==2080
 # =============
 #   Tokenizer
 # =============
+
+#We use a continue function in the tokenizer so we can pause at any point 
+
 
 takeNum = \numChars, inp ->
     when inp is
@@ -50,6 +60,7 @@ getToken = \input ->
 
         [] -> Err (RunOutt (getToken))
 
+
 readStream = \{} -> End
 tokenizeLoop = \{tokens, continue, depth}, inp ->
     when inp |> eatWhitespace |> continue is
@@ -69,8 +80,8 @@ tokenizeLoop = \{tokens, continue, depth}, inp ->
                 |>tokenizeLoop  rest
         Err (TokenizeErr) -> Err (TokenizeErr)
 
-## This would return
-#`readBytes` is an effectful function that returns more bytes
+## Pretend this function is effectful.
+#`readBytes` would be an effectful function that returns more bytes
 tokenize = \input,readBytes ->
     # read from the stream until we run out, read from the byte stream and then read again is needed
     loop= \state,inp->
@@ -83,13 +94,24 @@ tokenize = \input,readBytes ->
             Ok (tokens,rest)->Ok (tokens,Rest rest)
     loop {tokens:[],continue: (\inp2 -> getToken inp2), depth:0} input
 
+expect 
+    tokenize ("[12,122,[300]]"|>Str.toUtf8) \_->End
+    |>Result.isOk
+#Shows that we can resume tokenizing within a number
+expect 
+    res=tokenize 
+        ("[12,122,[30"|>Str.toUtf8)
+        \_-> "0]]"|>Str.toUtf8|>Rest
+    res
+    |>Result.isOk
+
 # =============
 #   Parser
 # =============
 
-PToken : [Close, Num U8, Open, Sep]
+PToken : [Close, Num U64, Open, Sep]
 PTokenList : List PToken
-ParseRes : [ListT (List ParseRes), Num U8]
+ParseRes : [ListT (List ParseRes), Num U64]
 ParseErr : [InvalidStart PTokenList, MissingAfterStart PTokenList, MissingAfterVal PTokenList]
 
 parseTokens : List PToken -> Result (ParseRes, PTokenList) _
