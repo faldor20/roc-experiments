@@ -4,22 +4,10 @@ app [main] {
 
 import pf.Stdout
 # THis will be a test of decoding a flat version of json. This version will contain only arrays and numbers.
-main =
-    res =
-        "[1,2,[ 2 ,3 ]],[1,3]]"
-        |> Str.toUtf8
-        # |>valueStream [] \state,val-> state|>List.append val
-        |> tokenize
-        |> Result.try \(tokens, _) ->
-            dbg tokens
-            tokens |> parseTokens
 
-    out =
-        when res is
-            Ok a -> []
-            Err _ -> [ListT []]
-    dbg res
-    Stdout.line! "hi"
+# =============
+#   Tokenizer
+# =============
 
 isWhitespace = \b ->
     when b is
@@ -32,46 +20,16 @@ eatWhitespace = \bytes ->
 isNum : U8 -> Bool
 isNum = \char -> char >= '0' && char <= '9'
 
-# My first approach tried to keep the current state of the system in memory at the top level and was a total failure. I cannot even type check it because the addToWips function needs to have a recursive type it's a mess I hate it. THe only solution would be to wrap each thing in a tag which is just building a token stream which is my next approach
-
-# findNext = \state, rest ->
-#     when rest is
-#         '[' -> Array []
-#         _ -> Other
-
-# addToWips =\wips, indexes, item ->
-#     # when List is
-#     when indexes is
-#         [] -> wips |> List.append item
-#         [idx, .. as rest] ->
-#             wips
-#             |> List.update idx \inner ->
-#                 addToWips inner rest item
-
-# Imagine we are parsing [1,[[[1,2,4,5,[1,|2]]]]]
-# Now even simpler[1[2,3]]
-# parse = \input ->
-#     loop = \state, inp ->
-#         when { wipOverall, indexes, currentState } is
-#             Num list ->
-#                 when inp is
-#                     [] -> Err { indexes, current }
-#                     [n, .. as rest] if isNum n -> loop (Num n)
-#                     [',', .. as rest] ->
-#                         findNext { wips } rest
-
-#             # [a,..] -> isNum n-> loop (Num n)
-#             Array list -> {}
-
-#     loop input
-
 numFromUtf8 = \nums ->
     nums
     |> List.walkBackwards (0, 1) \(num, idx), numChar ->
         (((numChar - 0x30) * idx) + num, idx + 1)
     |> .0
 
-# token stream
+# =============
+#   Tokenizer
+# =============
+
 takeNum = \numChars, inp ->
     when inp is
         [] -> Err (RunOut (\inp2 -> takeNum numChars inp2))
@@ -119,38 +77,19 @@ tokenize = \input ->
 
     loop [] (\inp2 -> getToken inp2) 0 input
 
-# This is correct but doesn't work becasue we need macros/compiler magic to make it type check
-# parse=\last,state,tokens->
-#     when last is
-#     Val->
-#         when tokens is
-#         [Sep,.. as rest2]-> parse Sep state rest2
-#         _-> Err MissingSep
-#     ListStart->
-#         when tokens is
-#         [Close,.. as rest]-> Ok (state,rest )
-#         [Num num,.. as rest]-> parse Val (state|>List.append  num) rest
-#         [ListStart,.. as rest] ->
-#             when (parse ListStart [] rest)is
-#             Err e->Err e
-#             Ok (val,rest2)->
-#                 parse Val (state|>List.append val  ) rest2
-#         _-> Err MissingSep
-#     Sep->
-#         when tokens is
-#         [Sep,.. as rest2]-> (parse Sep state rest2)
-#         _-> Err MissingSep
+# =============
+#   Parser
+# =============
 
-# PTokenRes:[MissingSep,MissingStart,MissingVal]
 PToken : [Close, Num U8, Open, Sep]
+PTokenList : List PToken
 ParseRes : [ListT (List ParseRes), Num U8]
+ParseErr : [InvalidStart PTokenList, MissingAfterStart PTokenList, MissingAfterVal PTokenList]
 
-parseTokens : List PToken -> Result ParseRes _
+parseTokens : List PToken -> Result (ParseRes, PTokenList) _
 parseTokens = \tokenList ->
-    parse : _, List ParseRes, List PToken -> Result (ParseRes, List PToken) _
+    parse : _, List ParseRes, List PToken -> Result (ParseRes, List PToken) ParseErr
     parse = \last, state, tokens ->
-        dbg state
-        dbg tokens
         when last is
             Val ->
                 when tokens is
@@ -182,24 +121,50 @@ parseTokens = \tokenList ->
                     _ -> Err (InvalidStart tokens)
 
     parse Start [] tokenList
-    |> Result.map \a ->
 
-        dbg a.0
-        a.0
+valueStream = \input, initState, handle ->
+    loop = \state, inp ->
+        when inp |> tokenize is
+            # Hit the final close
+            Ok ([Close], End) -> Ok state
+            # Just found a seperator token this means we are betwen top level items. This is a hack and I should probably parse it along with the item
+            Ok ([Sep], rest) ->
+                when rest is
+                    End -> Ok state
+                    Rest rest2 -> loop state rest2
 
-# valueStream= \input,initState, handle ->
-#     loop=\state,inp->
-#         when inp|>tokenize is
-#             Ok (tokens,rest)->
-#                 when parseTokens tokens  is
-#                 Err e->Err e
-#                 Ok(_,[_,..])-> Err LeftoverTokens
-#                 Ok (val,[])->
-#                     nState=handle state val
-#                     when rest is
-#                         End ->Ok state
-#                         Rest rest2->  loop nState rest2
-#             Err e->Err e
+            Ok (tokens, rest) ->
+                dbg tokens
+                when parseTokens tokens is
+                    Err e -> Err e
+                    Ok (_, [_, ..]) -> Err LeftoverTokens
+                    Ok (val, []) ->
+                        nState = handle state val
+                        when rest is
+                            End -> Ok state
+                            Rest rest2 -> loop nState rest2
 
-#     loop initState input
+            Err e -> Err e
 
+    loop initState input
+
+# =============
+#   Invocation
+# =============
+
+main =
+    input =
+        "[1,2,[ 2 ,3 ]],[1,3]]"
+        |> Str.toUtf8
+
+    res2 =
+        input
+        |> valueStream [] \items, item ->
+            # We can imagine doing some kind of effectful handling of this value. 
+            #Like transforming it and writing it to a file,
+            #but for now we will write it to a log, defeating the purpose of streaming ofcourse
+            items |> List.append item
+
+    # dbg res
+    dbg res2
+    Stdout.line! "hi"
