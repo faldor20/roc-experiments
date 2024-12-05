@@ -1,10 +1,12 @@
 (executable
  (public_name flat_ocaml)
  (name main)
- (libraries base stdio flat_parser)
- (preprocess (pps ppx_jane))
+ (libraries base stdio flat_parser unix)
+ (preprocess
+  (pps ppx_jane))
  (modes native))
 
 (env
-  (dev
-    (flags (:standard -warn-error -A))))
+ (dev
+  (flags
+   (:standard -warn-error -A))))

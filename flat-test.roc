@@ -61,22 +61,29 @@ getToken = \input ->
 
         [] -> Err (RunOutt (getToken))
 
-tokenizeLoop = \{ tokens, continue, depth }, inp ->
+tokenizeLoop = \{ tokens, continue, depth, lastToken }, inp ->
     when inp |> eatWhitespace |> continue is
         Err (RunOutt continueState) ->
-            Err (RunOut { continue: continueState, tokens, depth })
+            Err (RunOut { continue: continueState, tokens, depth, lastToken })
 
         Ok (token, rest) ->
-            newDepth =
+            if lastToken then
                 when token is
-                    Open -> depth + 1
-                    Close -> depth - 1
-                    _ -> depth
-            newTokens = (tokens |> List.append token)
-            if newDepth == 0 then
-                Ok (newTokens, rest)
+                    Sep ->
+                        Ok (tokens, rest, NextItem)
+
+                    Close ->
+                        Ok (tokens, rest, Done)
+
+                    _ -> Err TokenizeErr
             else
-                { tokens: newTokens, continue: \inp2 -> getToken inp2, depth: newDepth }
+                newDepth =
+                    when token is
+                        Open -> depth + 1
+                        Close -> depth - 1
+                        _ -> depth
+                newTokens = (tokens |> List.append token)
+                { tokens: newTokens, continue: \inp2 -> getToken inp2, depth: newDepth, lastToken: newDepth == 0 }
                 |> tokenizeLoop rest
 
         Err TokenizeErr -> Err (TokenizeErr)
@@ -91,10 +98,11 @@ tokenize! = \input, readBytes! ->
             Err (RunOut ranOutState) ->
                 when readBytes! buf is
                     Rest rest -> ranOutState |> loop! rest
-                    End -> Ok (ranOutState.tokens, End)
+                    End -> Ok (ranOutState.tokens, End, Done)
 
-            Ok (tokens, rest) -> Ok (tokens, Rest rest)
-    loop! { tokens: [], continue: \inp2 -> getToken inp2, depth: 0 } input
+            Ok (tokens, rest, next) ->
+                Ok (tokens, Rest rest, next)
+    loop! { tokens: [], continue: \inp2 -> getToken inp2, depth: 0, lastToken: Bool.false } input
 
 expect
     tokenize! ("[12,122,[300]]" |> Str.toUtf8) \_ -> End
@@ -153,30 +161,25 @@ parseTokens = \tokenList ->
     parse Start [] tokenList
 
 valueStream! = \input, readStream!, initState, handle ->
-    loop = \state, buf ->
+    loop! = \state, buf ->
         when buf |> tokenize! readStream! is
             # Hit the final close
-            Ok ([Close], End) -> Ok state
-            # Just found a seperator token this means we are betwen top level items. This is a hack and I should probably parse it along with the item
-            Ok ([Sep], rest) ->
-                when rest is
-                    End -> Ok state
-                    Rest rest2 -> loop state rest2
-
-            Ok (tokens, rest) ->
+            Ok (tokens, rest, next) ->
                 # dbg tokens
                 when parseTokens tokens is
                     Err e -> Err e
                     Ok (_, [_, ..]) -> Err LeftoverTokens
                     Ok (val, []) ->
                         nState = handle state val
-                        when rest is
-                            End -> Ok state
-                            Rest rest2 -> loop nState rest2
+                        when (rest, next) is
+                            (End, NextItem) -> Ok state # This should maybe error
+                            (End, Done) -> Ok state
+                            (Rest rest2, Done) -> Ok state # This should maybe error
+                            (Rest rest2, NextItem) -> loop! nState rest2
 
             Err e -> Err e
 
-    loop initState input
+    loop! initState input
 
 # =============
 #   Invocation
@@ -188,8 +191,8 @@ testParser! = \_ ->
         |> Str.toUtf8
 
     try (Stdout.line! ("starting"))
-    len = 8000
-    buf = List.range { start: At 0, end: Before len } |> List.map \a -> 0u8
+    len = 10000
+    buf = List.repeat 0u8 len
     reader = try (File.openReaderWithBuf! "input.txt" (buf))
     readBytes! = \buffer ->
         when reader |> File.readBytesBuf! buffer is
@@ -209,7 +212,7 @@ testParser! = \_ ->
             # items |> List.append item
             # dbg "decode"
             items + 1
-
+    dbg res
     Ok {}
 
 main! = \_ ->

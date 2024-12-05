@@ -9,12 +9,26 @@ let read_file_chunks filename chunk_size =
   let rec read_next _  =
     match In_channel.input channel chunk 0 chunk_size with
     | 0 -> End  (* EOF reached *)
-    | n -> More ( Bytes.sub chunk ~pos:0 ~len:n)
+    | n -> 
+      if n <> chunk_size then 
+      (
+      let final=Bytes.sub chunk ~pos:0 ~len:(n) in
+      (* Stdio.printf "read bytes %d:\n  %s \n" n (Bytes.to_string final); *)
+
+      
+        More ( final)
+      )
+
+      else 
+      (
+      (* Stdio.printf "read bytes %d:\n  %s \n" n (Bytes.to_string chunk); *)
+      More chunk
+      )
   in
   read_next, (fun () -> In_channel.close channel),chunk
 
 let () = 
-  let read_next, cleanup, chunk = read_file_chunks "input" 1024 in
+  let read_next, cleanup, chunk = read_file_chunks "input.txt" 10000 in
 
   let handle state value =
    

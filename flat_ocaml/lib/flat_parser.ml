@@ -17,17 +17,22 @@ type parse_error =
   | InvalidStart of token list
   | MissingAfterStart of token list
   | MissingAfterVal of token list
-  | TokenizeErr
+  | TokenizeErr of string 
+  | InvalidAfterParse of char
   | LeftoverTokens
   [@@deriving show]
 
 type tokenize_error =
   | NeedMore of (bytes -> int -> (token * int, tokenize_error) Result.t)
-  | TokenizeErr
+  | TokenizeErr of string
 
 type read_result = 
   | End
   | More of bytes
+
+type tokenizeRemainder = 
+  | Done
+  | Leftover of (bytes*int)
 
 (* Updated helper functions for bytes *)
 let is_whitespace = function
@@ -46,14 +51,15 @@ let is_num c =
 let num_from_bytes numBytes =
   (* Stdio.printf "NumBytes: %s\n" (numBytes |> List.map ~f:(fun c -> Char.to_string c) |> String.concat ~sep:","); *)
   numBytes
-  |> List.fold ~init:(0,0) ~f:(fun (acc, multiplier) c -> 
-    let digit = Char.to_int c -0x30  in
+  |> List.fold ~init:(0,1) ~f:(fun (acc, multiplier) c -> 
+    let digit = Char.to_int c - 0x30  in
     (* Stdio.printf "Digit: %d\n" digit; *)
     (acc + digit * multiplier, multiplier * 10))
   |> fst
 
 (* Updated tokenizer *)
 let rec take_num bytes numBytes pos =
+  (* Stdio.printf "NumBytes: %s\n" (numBytes |> List.map ~f:(fun c -> Char.to_string c) |> String.concat ~sep:","); *)
   if pos >= Bytes.length bytes then
     Error (NeedMore ((fun bytes pos -> take_num bytes numBytes pos)))
   else
@@ -61,81 +67,106 @@ let rec take_num bytes numBytes pos =
     if is_num c then
       take_num bytes (c::numBytes) (pos + 1)
     else
+(
       Ok (Num (num_from_bytes numBytes ), pos)
+      )
 
 let rec get_token bytes pos =
-  (* Stdio.printf "Pos: %d\n" pos; *)
-  (* Stdio.printf "Bytes: %s\n" (Bytes.to_string (Bytes.sub bytes ~pos ~len:(Bytes.length bytes - pos))); *)
+  let pos = eat_whitespace bytes pos in
   if pos >= Bytes.length bytes then
-  (
-    (* (Stdio.printf "NeedMore\n" ; *)
-    Error (NeedMore( get_token  )))
+    Error (NeedMore( get_token ))
   else
+  begin
+    (* (Stdio.printf "byte: %c\n" (Bytes.get bytes pos)); *)
     match Bytes.get bytes pos with
     | '[' -> Ok (Open, pos + 1)
     | ']' -> Ok (Close, pos + 1)
     | ',' -> Ok (Sep, pos + 1)
     | c when is_num c -> take_num bytes [c] (pos + 1)
-    | _ -> 
-      (* Stdio.printf "Error: %c\n" e; *)
-      Error TokenizeErr
+    | c -> 
+      Error (TokenizeErr (Printf.sprintf "bad char: %c" c))
+    end
 
 type tokenize_state = {
   tokens: token list;
   depth: int;
   pos: int;
   continue: bytes -> int -> (token * int, tokenize_error) Result.t;
+  lastToken:bool
 }
+ [@@deriving show]
+
+let getDepth depth token =
+      match token with
+        | Open -> depth + 1
+        | Close -> depth - 1
+        | _ -> depth
 
 let rec tokenize_loop state bytes =
   (* TODO: This could cuase whitespace to be eaten in the middle of a number *)
-  let pos = eat_whitespace bytes state.pos in
   (* Stdio.printf "Pos: %d\n" pos; *)
-  match state.continue bytes pos with
-  | Error ((NeedMore _)as more) -> Error (more, state)
-  | Error TokenizeErr -> Error (TokenizeErr, state)
+  match state.continue bytes state.pos with
+  | Error ((NeedMore _)as more) ->
+     Error (more, state)
+  | Error TokenizeErr s -> Error (TokenizeErr s, state)
   | Ok (token, pos) ->
-      let new_depth = match token with
-        | Open -> state.depth + 1
-        | Close -> state.depth - 1
-        | _ -> state.depth
-      in
-      (* Stdio.printf "Token: %s\n" (show_token token); *)
-      (* Stdio.printf "Depth: %d\n" new_depth; *)
-      let new_tokens = state.tokens @ [token] in
-      let new_state = { 
-        tokens = new_tokens;
-        depth = new_depth;
-        pos ;
-        continue = get_token;
-      } in
-      if new_depth <= 0 then
-        Ok (new_tokens,  pos)
-      else
-        tokenize_loop new_state bytes
+    if state.lastToken then
+    (
+    (*check the next token to see if it indicates the end or a comma indicatin more data*)
+      match token with
+        |Sep->
+          Ok (state.tokens, pos,false)
+        |Close-> 
+          Ok (state.tokens, pos,true)
+        |_-> Error (TokenizeErr(show_tokenize_state state),state)
+      )
+    else begin
+    
+      let new_depth = getDepth state.depth token in
+      let new_tokens = token::state.tokens  in
+let new_state =       
 
-let tokenize bytes read_more =
+        { 
+          tokens = new_tokens;
+          depth = new_depth;
+          pos;
+          continue = get_token;
+          lastToken= (new_depth=0)
+        } 
+        in
+          tokenize_loop new_state bytes
+      end
+
+let tokenize bytes pos read_more =
   let rec loop state bytes=
+    (* Stdio.printf "bytes%d:%s\n" (bytes|>Bytes.length)(bytes|>Bytes.to_string); *)
     match tokenize_loop state bytes with
-    | Error (TokenizeErr, _) -> Error TokenizeErr
+    | Error (TokenizeErr s, state) -> Error (TokenizeErr ( s))
     | Error (NeedMore(continue), state) ->
         (* You could get super fancy and use a ring buffer here, you parse untill you get stuck and need more and then you return the current index and then copy then tell it to write the new data after the current part and then start parsin again*)
         (match read_more bytes with
-         | End -> Ok (state.tokens, End)
-         | More bytes -> 
-            if Bytes.length bytes =0 then
-              Ok (state.tokens, End)
-            else (* Stdio.printf "New bytes: %s\n" (Bytes.to_string bytes); *)
-             loop {state with continue; pos = 0} bytes)
-    | Ok (tokens, pos) ->
+         | End -> 
+           Ok (state.tokens|>List.rev, Done)
+         | More newBytes -> 
+            if Bytes.length newBytes = 0 then
+            (
+              Ok (state.tokens|>List.rev, Done)
+              )
+            else 
 
-        let remaining = Bytes.sub bytes ~pos ~len:(Bytes.length bytes - pos) in
-        Ok (tokens, More remaining)
+            (
+              let state={state with continue; pos = 0;} in
+              loop state newBytes
+            )
+          )
+    | Ok (tokens, pos,isLast) ->
+        Ok (tokens|>List.rev, if isLast then Done else Leftover(bytes, pos))
   in
   let initial_state = {
     tokens = [];
     depth = 0;
-    pos = 0;
+    pos; 
+    lastToken=false;
     continue = get_token;
   } in
   loop initial_state bytes
@@ -178,6 +209,9 @@ let rec parse last state tokens =
 
 let parse_tokens tokens =
   parse Start [] tokens
+let print_tokens tokens=
+      (* Stdio.printf "Tokens: %s\n" (tokens |> List.map ~f:show_token |> String.concat ~sep:","); *)
+      ()
 
 let%test "basic parsing" =
   let input = Bytes.of_string "[12,122,[300]]" in
@@ -186,13 +220,14 @@ let%test "basic parsing" =
     Int.incr read_count;
     End
   in
-  match tokenize input read_more with
+  match tokenize input 0 read_more with
   | Error _ -> false
   | Ok (tokens, _) -> 
-
       match parse_tokens tokens with
       | Ok _ -> true
-      | Error _ -> false
+      | Error _ -> 
+        print_tokens tokens;
+        false
 
 let%test "streaming parsing" =
   let input1 = Bytes.of_string "[12,122,[30" in
@@ -203,32 +238,42 @@ let%test "streaming parsing" =
     if !read_count = 1 then More input2
     else End
   in
-  match tokenize input1 read_more with
+  match tokenize input1 0 read_more with
   | Error _ -> false 
   | Ok (tokens, _) -> 
       match parse_tokens tokens with
       | Ok _ -> true
       | Error _ -> false
 
-let value_stream bytes init_state handle read_more =
-  let rec loop state inp =
-    match tokenize inp read_more with
-    | Ok ([Close], End) -> Ok state
-    | Ok ([Close], More _) -> Ok state
-    | Ok ([Sep], End) -> Ok state
-    | Ok ([Sep], More rest) -> loop state rest
-    | Ok (tokens, rest) ->
+(* type whatNext= *)
+  (* Next|End|Invalid *)
 
-        (* Stdio.printf "Tokens: %s\n" ( tokens|> List.map ~f:show_token |> String.concat ~sep:" "); *)
-        (match parse_tokens tokens with
-         | Error e -> Error e
-         | Ok (_, _::_) -> Error LeftoverTokens
-         | Ok (value, []) ->
-             let new_state = handle state value in
+(* let whatNext   bytes= *)
+  (* match Bytes.get bytes 0 with *)
+  (* |','-> Next *)
+  (* |']'-> End *)
+  (* |_->Invalid *)
+
+
+let value_stream bytes init_state handle read_more =
+
+  let rec loop state inp pos =
+      match tokenize inp pos read_more with
+      | Ok (tokens, rest) ->
+      (* Stdio.printf "Tokens: %s\n" (tokens |> List.map ~f:show_token |> String.concat ~sep:","); *)
+          (match parse_tokens tokens with
+           | Error e -> Error e
+           | Ok (_, _::_) -> Error LeftoverTokens
+           | Ok (value, []) ->
+               let new_state = handle state value in
              
-             (match rest with
-              | End -> Ok state
-              | More rest2 -> loop new_state rest2))
-    | Error _ -> Error TokenizeErr
+
+               (match rest with
+                | Done -> Ok state
+                | Leftover (bytes, pos )-> 
+                    (*read the next byte and decide whether to end or not*)
+                   loop new_state bytes pos
+                ))
+      | Error (TokenizeErr s) -> Error (TokenizeErr s )
   in
-  loop init_state bytes
+  loop init_state bytes 0
