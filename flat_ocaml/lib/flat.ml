@@ -266,8 +266,6 @@ let value_stream bytes init_state handle read_more =
            | Ok (_, _::_) -> Error LeftoverTokens
            | Ok (value, []) ->
                let new_state = handle state value in
-             
-
                (match rest with
                 | Done -> Ok state
                 | Leftover (bytes, pos )-> 

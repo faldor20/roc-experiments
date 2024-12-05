@@ -70,11 +70,13 @@ tokenizeLoop = \{ tokens, continue, depth, lastToken }, inp ->
             if lastToken then
                 when token is
                     Sep ->
-                        Ok (tokens, rest, NextItem)
-
+                        if tokens|>List.len <1000 then
+                            { tokens, continue: \inp2 -> getToken inp2, depth:0, lastToken:Bool.false }
+                            |> tokenizeLoop rest
+                        else
+                            Ok (tokens, rest, NextItem)
                     Close ->
                         Ok (tokens, rest, Done)
-
                     _ -> Err TokenizeErr
             else
                 newDepth =
@@ -162,20 +164,26 @@ parseTokens = \tokenList ->
 
 valueStream! = \input, readStream!, initState, handle ->
     loop! = \state, buf ->
+        # dbg state
         when buf |> tokenize! readStream! is
             # Hit the final close
-            Ok (tokens, rest, next) ->
-                # dbg tokens
-                when parseTokens tokens is
-                    Err e -> Err e
-                    Ok (_, [_, ..]) -> Err LeftoverTokens
-                    Ok (val, []) ->
-                        nState = handle state val
-                        when (rest, next) is
-                            (End, NextItem) -> Ok state # This should maybe error
-                            (End, Done) -> Ok state
-                            (Rest rest2, Done) -> Ok state # This should maybe error
-                            (Rest rest2, NextItem) -> loop! nState rest2
+            Ok (tokes, rest, next) ->
+                parseLoop= \tokens->
+                    # dbg tokens
+                    when parseTokens tokens is
+                        Err e -> Err e
+                        Ok (val, []) ->
+                            nState = handle state val
+                            when (rest, next) is
+                                (End, NextItem) -> Ok (Done state) # This should maybe error
+                                (End, Done) -> Ok (Done state)
+                                (Rest rest2, Done) -> Ok (Done state) # This should maybe error
+                                (Rest rest2, NextItem) -> Ok (Rest rest2 nState)
+                        Ok (_, restTokens) -> parseLoop restTokens
+                when parseLoop tokes is
+                Ok (Rest rest2 nState)->
+                    loop! nState rest2
+                a->a
 
             Err e -> Err e
 
