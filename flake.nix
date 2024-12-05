@@ -19,6 +19,7 @@
           ocamlPackages.stdio
           ocamlPackages.findlib
           ocamlPackages.ppx_deriving
+          go
         ];
 
       };
