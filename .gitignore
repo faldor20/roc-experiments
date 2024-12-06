@@ -1,2 +1,7 @@
 _build
+builds
 .direnv
+flat_ocaml/dune.lock
+**perf**
+**input**
+**inp**
