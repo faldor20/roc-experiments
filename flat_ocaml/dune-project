@@ -19,7 +19,13 @@
  (name flat_ocaml)
  (synopsis "A short synopsis")
  (description "A longer description")
- (depends ocaml dune)
+ (depends 
+  (ocaml (>= "5.2"))
+  base
+  stdio
+  ; ppx_jane
+  ppx_deriving
+  (bytesrw (>= "0.1.0")))
  (tags
   (topics "to describe" your project)))
 

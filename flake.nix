@@ -18,6 +18,7 @@
           ocamlPackages.base
           ocamlPackages.stdio
           ocamlPackages.findlib
+          ocamlformat
           ocamlPackages.ppx_deriving
           go
         ];
