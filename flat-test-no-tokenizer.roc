@@ -55,6 +55,7 @@ TokenRes:(PToken,Bytes)
 
 # takeNum: Bytes,Bytes->Result TokenRes (TokenizerErr )
 takeNum = \numChars, inp ->
+    # dbg numChars
     when inp is
         [] -> Err (RunOutt (\inp2 -> takeNum numChars inp2))
         [num, .. as rest] if isNum num -> takeNum (numChars |> List.append num) rest
@@ -88,21 +89,23 @@ pop= \list->
 
 # push=\list,elem->List.append list elem
 
-parseGlobalOuter: Bytes->Result ([Continue ,EndOfStream ],(ParseRes),Bytes) ErrList
-parseGlobalOuter=\ input->
+# parseGlobalOuter: Bytes->Result ([Continue ,EndOfStream ],(ParseRes),Bytes) ErrList
+parseGlobalOuter=\readMore!, input->
     # This uses a stack of parents to parse into lists
     # The reason it has this weird wraping is so we can override the getToken function for a single iteration when calling back to a partially parsed token
-    parseGlobal: (Bytes-> Result (PToken,Bytes) TokenizerErr),_,_,_->Result ([Continue ,EndOfStream ],(ParseRes),Bytes) ErrList
+    # parseGlobal: (Bytes-> Result (PToken,Bytes) TokenizerErr),_,_,_->Result ([Continue ,EndOfStream ],(ParseRes),Bytes) ErrList
     parseGlobal = \thisFetchToken,st, op, inp ->
         {parents,currentList}=st
-        when getToken inp is
+        when thisFetchToken inp is
         Err (RunOutt (getRest))->
-            next: Bytes->Result _ ErrList
-            next=\bytes -> parseGlobal getRest st op bytes
-            Err (RunOut next  )
-           
+            when readMore! {} is
+                End-> Err NoMoreBytes
+                Rest bytes2->
+                    # dbg (bytes2|>Str.fromUtf8)
+                    parseGlobal getRest st op bytes2
         Err _ ->Err TokenizerErr
         Ok (token, bytes) ->
+            # dbg token
 
             when op is
             AfterVal val-> 
@@ -115,46 +118,64 @@ parseGlobalOuter=\ input->
                         #End of the last list, this means we should now check whether to continue or not by parsing the next token 
                         Err _->   
                             parseGlobal
-                               thisFetchToken
-                               {parents:[],currentList:None}
+                               getToken
+                               {st &currentList:None}
                                 (AfterVal  (ListT nextVal))
                                 bytes
 
-                        # This handles
+                        # This handles normal list closure
                         Ok {elem,rest}->
                             parseGlobal
-                               thisFetchToken
+                               getToken
                                {parents:rest,currentList:Some elem}
                                 (AfterVal  (ListT nextVal))
                                 bytes
                     Sep -> 
                         parseGlobal 
-                            thisFetchToken
+                            getToken
                             {st&currentList:Some nextVal}
                             Val
                             bytes
-                    _ -> Err MissingAfterVal
+                    t -> Err (MissingAfterVal t)
                 None ->
                     when token is
                     Sep->
-                        Ok(Continue ,val,bytes)
+                        Ok(val,Continue bytes)
                     Close->
-                        Ok(EndOfStream ,val,bytes)
-                    _ -> Err MissingAfterVal
+                        Ok(val,EndOfStream )
+                    t -> Err (MissingAfterVal t)
             Val-> 
                 when token is 
-                Num a-> parseGlobal thisFetchToken st (AfterVal(Num a)) bytes
+                Num a-> parseGlobal getToken st (AfterVal(Num a)) bytes
                 Open-> 
                     when currentList is 
                     Some list->
                         parseGlobal 
-                            thisFetchToken
+                            getToken
                             {parents:parents|>List.append list,currentList:Some []} 
                             Val 
                             bytes
                     None->
-                        parseGlobal thisFetchToken {st&currentList:Some []} Val bytes
-                _-> Err UnexpectedToken
+                        parseGlobal getToken {st&currentList:Some []} Val bytes
+                Close-> 
+                        #handles the special [] case
+                        when (pop parents) is
+                        Err _->   
+                            parseGlobal
+                               getToken
+                               {st& currentList:None}
+                                (AfterVal  (ListT []))
+                                bytes
+
+                        # This handles normal list closure
+                        Ok {elem,rest}->
+                            parseGlobal
+                               getToken
+                               {parents:rest,currentList:Some elem}
+                                (AfterVal (ListT []))
+                                bytes
+
+                a-> Err (UnexpectedToken a)
 
     parseGlobal getToken {parents:[],currentList:None} Val input 
 ParseLoopRes:([Continue ,EndOfStream ],(ParseRes),Bytes)
@@ -163,34 +184,26 @@ ErrList:[RunOut (Bytes->Result (ParseLoopRes) ErrList ),TokenizerErr,UnexpectedT
 startParse! : ({}=>[End,Rest Bytes]),Bytes,a,(a,ParseRes->a)=>_
 startParse! = \readBytes!, bytesI,stateI,handler ->
     # parseLoop! : (Bytes->Result ParseLoopRes ErrList),_,Bytes =>Result  _ _
-    first=parseGlobalOuter bytesI
-    parseLoop = \ result,state->
+    parseLoop = \ state,bytes->
         # First parse the current value
-        when result is 
-        Err (RunOut continue)-> 
-            when readBytes! {} is
-                End-> Ok state
-                Rest bytes2->
-                    res =continue  bytes2
-                    parseLoop res state 
-        Ok (next,val, remainingBytes) -> 
+        when parseGlobalOuter readBytes! bytes is 
+        Ok (val, next) -> 
             when next is 
             EndOfStream ->
                 newState = handler state val
                 Ok newState
-            Continue ->
+            Continue remainingBytes->
                 newState = handler state val
-                res =parseGlobalOuter remainingBytes
-                parseLoop  res newState 
+                parseLoop  newState  remainingBytes
 
-        Err MissingAfterVal->Err ParseErr
-        Err TokenizerErr->Err ParseErr
-        Err UnexpectedToken->Err ParseErr
+        Err a->
+            # dbg a 
+            Err ParseErr
         # Err _ -> Err Pa
         # Err TokenizeErr->Err ParseErr
         # Err (UnexpectedToken)->Err ParseErr
 
-    parseLoop first stateI 
+    parseLoop stateI bytesI
 
 
 # valueStream! = \input, readStream!, initState, handle ->
@@ -250,6 +263,7 @@ testParser! = \_ ->
             # items |> List.append item
             # dbg "decode"
             items + 1
+    try Stdout.line! "$(res|>Inspect.toStr)"
     dbg res
     Ok {}
 
