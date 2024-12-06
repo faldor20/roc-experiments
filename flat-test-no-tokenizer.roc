@@ -88,14 +88,14 @@ pop= \list->
     Ok {rest:List.dropLast list 1,elem:elem}
 
 # push=\list,elem->List.append list elem
-
+empty=[]
 # parseGlobalOuter: Bytes->Result ([Continue ,EndOfStream ],(ParseRes),Bytes) ErrList
-parseGlobalOuter=\readMore!, input->
+parseGlobalOuter=\readMore!, input,state->
     # This uses a stack of parents to parse into lists
     # The reason it has this weird wraping is so we can override the getToken function for a single iteration when calling back to a partially parsed token
     # parseGlobal: (Bytes-> Result (PToken,Bytes) TokenizerErr),_,_,_->Result ([Continue ,EndOfStream ],(ParseRes),Bytes) ErrList
     parseGlobal = \thisFetchToken,st, op, inp ->
-        {parents,currentList}=st
+        {parents,currentList,depth}=st
         when thisFetchToken inp is
         Err (RunOutt (getRest))->
             when readMore! {} is
@@ -106,95 +106,98 @@ parseGlobalOuter=\readMore!, input->
         Err _ ->Err TokenizerErr
         Ok (token, bytes) ->
             # dbg token
+            # dbg op
+            # dbg depth
 
             when op is
             AfterVal val-> 
-                when currentList  is
-                Some items->
-                    nextVal=items|>List.append val
+                if depth>0 then
+
+                    nextVal=currentList|>List.append val
                     when token is
                     Close-> 
-                        when (pop parents) is
+                        #Potentially I should have some global donor list I use to overwrite ther references to this List when I'm no longer going to be accessing it to avoid extra references to my lists
+                        if (depth==1) then
                         #End of the last list, this means we should now check whether to continue or not by parsing the next token 
-                        Err _->   
                             parseGlobal
                                getToken
-                               {st &currentList:None}
+                               {st &depth:0}
                                 (AfterVal  (ListT nextVal))
                                 bytes
 
                         # This handles normal list closure
-                        Ok {elem,rest}->
+                        else
+                            nextList=try (parents|>List.get (depth-1))
                             parseGlobal
                                getToken
-                               {parents:rest,currentList:Some elem}
+                               {st& parents:parents |>List.set depth empty,currentList:nextList,depth:(depth-1)}
                                 (AfterVal  (ListT nextVal))
                                 bytes
                     Sep -> 
                         parseGlobal 
                             getToken
-                            {st&currentList:Some nextVal}
+                            {st&currentList:nextVal}
                             Val
                             bytes
                     t -> Err (MissingAfterVal t)
-                None ->
+                else
                     when token is
                     Sep->
-                        Ok(val,Continue bytes)
+                        Ok(val,Continue bytes,state)
                     Close->
-                        Ok(val,EndOfStream )
+                        Ok(val,EndOfStream,state )
                     t -> Err (MissingAfterVal t)
             Val-> 
                 when token is 
                 Num a-> parseGlobal getToken st (AfterVal(Num a)) bytes
                 Open-> 
-                    when currentList is 
-                    Some list->
+                    if(depth>0) then 
+                    
                         parseGlobal 
                             getToken
-                            {parents:parents|>List.append list,currentList:Some []} 
+                            {parents:parents|>List.set (depth) currentList,currentList:[],depth:depth+1} 
                             Val 
                             bytes
-                    None->
-                        parseGlobal getToken {st&currentList:Some []} Val bytes
+                    else
+                        parseGlobal getToken {st&currentList:[],depth:depth+1} Val bytes
                 Close-> 
-                        #handles the special [] case
-                        when (pop parents) is
-                        Err _->   
+                    #handles the special [] case
+                        if (depth==0)then
+                        
                             parseGlobal
                                getToken
-                               {st& currentList:None}
+                               st
                                 (AfterVal  (ListT []))
                                 bytes
-
-                        # This handles normal list closure
-                        Ok {elem,rest}->
+                        else
+                            nextList=try (parents|>List.get (depth-1))
                             parseGlobal
                                getToken
-                               {parents:rest,currentList:Some elem}
-                                (AfterVal (ListT []))
+                               {st&parents:parents |>List.set depth empty,currentList:nextList,depth:(depth-1)}
+                                (AfterVal  (ListT []))
                                 bytes
 
                 a-> Err (UnexpectedToken a)
 
-    parseGlobal getToken {parents:[],currentList:None} Val input 
+    parseGlobal getToken state Val input 
 ParseLoopRes:([Continue ,EndOfStream ],(ParseRes),Bytes)
 ErrList:[RunOut (Bytes->Result (ParseLoopRes) ErrList ),TokenizerErr,UnexpectedToken,MissingAfterVal,] 
 
 startParse! : ({}=>[End,Rest Bytes]),Bytes,a,(a,ParseRes->a)=>_
 startParse! = \readBytes!, bytesI,stateI,handler ->
     # parseLoop! : (Bytes->Result ParseLoopRes ErrList),_,Bytes =>Result  _ _
-    parseLoop = \ state,bytes->
+
+    parseLoop = \parseState ,state,bytes->
         # First parse the current value
-        when parseGlobalOuter readBytes! bytes is 
-        Ok (val, next) -> 
+        when parseGlobalOuter readBytes! bytes parseState is 
+        Ok (val, next,parseState2) -> 
             when next is 
             EndOfStream ->
                 newState = handler state val
                 Ok newState
             Continue remainingBytes->
                 newState = handler state val
-                parseLoop  newState  remainingBytes
+                parseLoop  parseState2 newState  remainingBytes
 
         Err a->
             # dbg a 
@@ -203,7 +206,7 @@ startParse! = \readBytes!, bytesI,stateI,handler ->
         # Err TokenizeErr->Err ParseErr
         # Err (UnexpectedToken)->Err ParseErr
 
-    parseLoop stateI bytesI
+    parseLoop {parents:List.repeat [] 50,currentList:[],depth:0} stateI bytesI
 
 
 # valueStream! = \input, readStream!, initState, handle ->
