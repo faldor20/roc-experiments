@@ -4,6 +4,7 @@ app [main!] {
 
 import pf.Stdout
 import pf.File
+import pf.Util
 # THis will be a test of decoding a flat version of json. This version will contain only arrays and numbers.
 
 # =============
@@ -16,7 +17,7 @@ isWhitespace = \b ->
         _ -> Bool.false
 eatWhitespace = \bytes ->
     when bytes is
-        [a, ..as rest ] if isWhitespace a -> eatWhitespace rest
+        [a, .. as rest] if isWhitespace a -> eatWhitespace rest
         _ -> bytes
 isNum : U8 -> Bool
 isNum = \char -> char >= '0' && char <= '9'
@@ -43,9 +44,12 @@ takeNum! = \numChars, inp, readMore! ->
     # dbg (Str.fromUtf8 numChars)
     when inp is
         [] ->
-            when try readMore! inp is
-                [] -> Err (EndOfData)
-                a -> takeNum! numChars a readMore!
+            p=(Util.assertUnique! inp)
+            # dbg p
+            when readMore! {} is
+                Err _| Ok [] ->
+                    Err (EndOfData )
+                Ok rest -> takeNum! numChars rest readMore!
 
         [num, .. as rest] if isNum num -> takeNum! (numChars |> List.append num) rest readMore!
         _ -> if numChars |> List.len > 0 then Ok (numChars |> numFromUtf8 |> Num, inp) else Err (TokenizeErr (FailedParsingNum))
@@ -63,10 +67,15 @@ getToken! = \input, readMore! ->
             else
                 Err (TokenizeErr MissingNum)
 
-        [] as out ->
-            when try readMore! out is
-                [] -> Err (EndOfData)
-                a -> getToken! a readMore!
+        []  ->
+            p=(Util.assertUnique! bytes  )
+            # dbg p
+            when readMore! {} is
+                Err _ | Ok [] ->
+                    Err (EndOfData)
+
+                Ok rest -> getToken! rest readMore!
+
 
 parseList = \items, inp, readMore! ->
     (token, bytes) = try getToken! inp readMore!
@@ -83,15 +92,19 @@ parseList = \items, inp, readMore! ->
 
         Open ->
             # dbg "list inside list"
-            (Y, bytes1) = try parseList items bytes readMore!
-            nextItems = items |> List.append (inner)
-            # dbg nextItems
-            (token2, bytes2) = try getToken! bytes1 readMore!
-            # dbg token2
-            when token2 is
-                Close -> Ok (ListT nextItems, bytes2)
-                Sep -> parseList nextItems bytes2 readMore!
-                _ -> Err MissingAfterVal
+            when parseList items bytes readMore!is
+            Err e ->Err e
+            Ok(inner,bytes1)->
+                nextItems = items |> List.append (inner)
+                # dbg nextItems
+                when getToken! bytes1 readMore! is
+                Err e ->Err e
+                Ok(token2,bytes2)->
+                    # dbg token2
+                    when token2 is
+                        Close -> Ok (ListT nextItems, bytes2)
+                        Sep -> parseList nextItems bytes2 readMore!
+                        _ -> Err MissingAfterVal
 
         Close -> Ok (ListT [], bytes)
         _ -> Err (InvalidStart ("Invalid start:  $(Inspect.toStr token)"))
@@ -126,26 +139,54 @@ startParse = \handler, state, readMore! ->
     \bytes -> parseLoop handler state bytes readMore!
 
 testParser! = \_ ->
-    input =
-        "[1,2,[ 2 ,3 ]],[1,3]]"
-        |> Str.toUtf8
+    # input =
+        # "[1,2,[ 2 ,3 ]],[1,3]]"
+        # |> Str.toUtf8
 
     try (Stdout.line! ("starting"))
-    len = 10000
-    buf = List.repeat 0u8 len
+    len = 5
+    #TODO: this isn't seming to effect the amount red. that's very odd
+    buf = List.withCapacity 10    # buf2 = List.repeat 0u8 len
+    buf2 = List.withCapacity 10    # buf2 = List.repeat 0u8 len
+    dbg "making reader"
     reader = try (File.openReaderWithBuf! "input.txt" (buf))
-    readBytes! = \buffer ->
-        when reader |> File.readBytesBuf! buffer is
-            Err _ -> Err (EndOfData)
-            Ok bytes -> Ok bytes
+    # reader1 = try (File.openReaderWithBuf! "input.txt" (buf))
+    # reader2 = try (File.openReaderWithBuf! "input.txt" (buf))
+   # reader3 = try (File.openReaderWithBuf! "input.txt" (buf2))
+    # dbg (reader3|>File.read!)
+    dbg "made reader"
+    readBytes!:{}=>Result (List U8 ) _
+    readBytes! = \ {}->
+        # when 
+        # dbg "reading"
+        when reader |> File.read!  is 
+        Err e -> 
+            # dbg e
+            Err e
+        Ok a->
+            # dbg (Str.fromUtf8 a)
+            Ok a
+        # dbg readRes
+        # readRes
 
-    first = try (reader |> File.readBytesBuf! buf)
+        # is
+            # Err _ -> Err (EndOfData)
+            # Ok bytes -> Ok bytes
 
-    res = try parseLoop (\handlerState, _ ->
-     # dbg handlerState
-     handlerState+ 1) 1 first readBytes!
+    dbg "first read"
 
-    try Stdout.line! "$(res|>Inspect.toStr)"
+    dbg "done first "
+    res = try
+        parseLoop
+        (\handlerState, _ ->
+            # dbg handlerState
+            handlerState + 1)
+        1
+        []
+        readBytes!
+
+    try Stdout.line! "$(res |> Inspect.toStr)"
+    dbg res
     Ok {}
 
 main! = \_ ->

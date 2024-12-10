@@ -13,7 +13,7 @@ testRawReadSpeed! = \{} ->
     otherBuf = []
 
     loop! = \state, buf2 ->
-        readRes = reader |> File.readBytesBuf! buf2
+        readRes = reader |> File.read! 
         when readRes is
             Err e ->
                 Err (e, state)

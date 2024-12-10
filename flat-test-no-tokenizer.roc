@@ -250,13 +250,13 @@ testParser! = \_ ->
     buf = List.repeat 0u8 len
     reader = try (File.openReaderWithBuf! "input.txt" (buf))
     readBytes! = \{}->
-        when reader |> File.readBytesBuf! buf is
+        when reader |> File.read! is
             Err _ -> End
             Ok bytes ->
                 when bytes is
                     [] -> End
                     b -> Rest b
-    first = try (reader |> File.readBytesBuf! buf)
+    first = try (reader |> File.read! )
     res =try
         startParse! readBytes! first  0 \items, item ->
             # We can imagine doing some kind of effectful handling of this value.
